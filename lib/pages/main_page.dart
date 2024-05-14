@@ -1,3 +1,4 @@
+import 'dart:developer';
 import 'dart:ui';
 //Packages
 import 'package:flutter/material.dart';
@@ -6,9 +7,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 // Models
 import '../models/movie_model.dart';
 import '../models/search_category.dart';
+import '../models/main_page_data.dart';
 
 // Widgets
 import '../widgets/movie_list_view_item.dart';
+
+// Controllers
+import '../controllers/main_page_data_controller.dart';
+
+final mainPageDataControllerProvider =
+    StateNotifierProvider<MainPageDataController, MainPageData>((ref) {
+  return MainPageDataController();
+});
+
+final selectedMoviePosterURLProvider = StateProvider<String?>((ref) {
+  final movies = ref.watch(mainPageDataControllerProvider).movies!;
+  return movies.isNotEmpty ? movies[0].posterUrl() : null;
+});
 
 class MainPage extends ConsumerWidget {
   late double deviceHeight;
@@ -16,16 +31,30 @@ class MainPage extends ConsumerWidget {
 
   late TextEditingController searchTextFieldController;
 
+  late MainPageDataController mainPageDataController;
+  late MainPageData mainPageData;
+
+  late var _selectedMoviePosterURL;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     deviceHeight = MediaQuery.of(context).size.height;
     deviceWeight = MediaQuery.of(context).size.width;
     searchTextFieldController = TextEditingController();
+
+    mainPageDataController = ref.watch(mainPageDataControllerProvider.notifier);
+    mainPageData = ref.watch(mainPageDataControllerProvider);
+
+    searchTextFieldController.text = mainPageData.searchText ?? '';
+
+    _selectedMoviePosterURL = ref.watch(selectedMoviePosterURLProvider);
+
     return _buildUI();
   }
 
   Widget _buildUI() {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: Colors.black,
       body: SizedBox(
         height: deviceHeight,
@@ -42,23 +71,24 @@ class MainPage extends ConsumerWidget {
   }
 
   Widget _backgroundWidget() {
-    return Container(
-      height: deviceHeight,
-      width: deviceWeight,
-      decoration: const BoxDecoration(
-          image: DecorationImage(
-              image: NetworkImage(
-                  'https://i.ebayimg.com/images/g/rTUAAOSwFaRkfzZ8/s-l1200.jpg'),
-              fit: BoxFit.cover)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.2),
-          ),
-        ),
-      ),
-    );
+    return _selectedMoviePosterURL != null
+        ? Container(
+            height: deviceHeight,
+            width: deviceWeight,
+            decoration: BoxDecoration(
+                image: DecorationImage(
+                    image: NetworkImage(_selectedMoviePosterURL),
+                    fit: BoxFit.cover)),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.2),
+                ),
+              ),
+            ),
+          )
+        : Container();
   }
 
   Widget _forgroundWidget() {
@@ -83,30 +113,43 @@ class MainPage extends ConsumerWidget {
   }
 
   Widget _movieListViewWidget() {
-    final List<MovieModel> movies = [];
-    for (var i = 0; i < 10; i++) {
-      movies.add(MovieModel(
-        title: 'Test Test',
-        adult: true,
-        voteAverage: 5.3,
-        overview: 'lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum',
-        releaseDate: '2022-01-01',
-      ));
-    }
+    final List<MovieModel> movies = mainPageData.movies!;
+
     if (movies.isNotEmpty) {
-      return ListView.builder(
-          itemCount: movies.length,
-          physics: const BouncingScrollPhysics(),
-          itemBuilder: (context, index) {
-            return Padding(
-              padding: EdgeInsets.symmetric(vertical: deviceHeight * 0.01),
-              child: MovieListViewItem(
-                deviceHeight: deviceHeight,
-                deviceWeight: deviceWeight,
-                movie: movies[index],
-              ),
-            );
-          });
+      return NotificationListener(
+        onNotification: (onScrollNotification) {
+          if (onScrollNotification is ScrollEndNotification) {
+            final before = onScrollNotification.metrics.extentBefore;
+            final max = onScrollNotification.metrics.maxScrollExtent;
+
+            if (before == max) {
+              mainPageDataController.getMovies();
+              return true;
+            }
+            return false;
+          }
+          return false;
+        },
+        child: ListView.builder(
+            itemCount: movies.length,
+            physics: const BouncingScrollPhysics(),
+            itemBuilder: (context, index) {
+              return Padding(
+                padding: EdgeInsets.symmetric(vertical: deviceHeight * 0.01),
+                child: InkWell(
+                  splashColor: Colors.red,
+                  onTap: () {
+                    _selectedMoviePosterURL = movies[index].posterUrl();
+                  },
+                  child: MovieListViewItem(
+                    deviceHeight: deviceHeight,
+                    deviceWeight: deviceWeight,
+                    movie: movies[index],
+                  ),
+                ),
+              );
+            }),
+      );
     } else {
       return const Center(
         child: CircularProgressIndicator(backgroundColor: Colors.white),
@@ -140,7 +183,9 @@ class MainPage extends ConsumerWidget {
       width: deviceWeight * .50,
       child: TextField(
         controller: searchTextFieldController,
-        onSubmitted: (input) {},
+        onSubmitted: (input) {
+          mainPageDataController.updateSearchText(searchText: input);
+        },
         style: const TextStyle(
           color: Colors.white,
         ),
@@ -164,7 +209,7 @@ class MainPage extends ConsumerWidget {
   Widget _categorySelectionWidget() {
     return DropdownButton(
       dropdownColor: Colors.black38,
-      value: SearchCategory.popular,
+      value: mainPageData.searchCategory,
       icon: const Icon(
         Icons.menu,
         color: Colors.white24,
@@ -182,13 +227,23 @@ class MainPage extends ConsumerWidget {
           ),
         ),
         DropdownMenuItem(
-            value: SearchCategory.upComing,
-            child: Text(
-              SearchCategory.upComing,
-              style: TextStyle(color: Colors.white),
-            )),
+          value: SearchCategory.upComing,
+          child: Text(
+            SearchCategory.upComing,
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+        DropdownMenuItem(
+          value: SearchCategory.none,
+          child: Text(
+            SearchCategory.none,
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
       ],
-      onChanged: (value) {},
+      onChanged: (value) => value.toString().isNotEmpty
+          ? mainPageDataController.updateSearchCategory(category: value!)
+          : null,
     );
   }
 }
